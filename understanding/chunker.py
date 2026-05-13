@@ -530,7 +530,8 @@ def extract_abstract(markdown: str) -> str:
     Returns:
         摘要文本
     """
-    abstract_pattern = re.compile(r'##\s*[Aa]bstract\s*\n+(.+?)(?=\n##|\Z)', re.DOTALL)
+    # 匹配 ## Abstract 或 # Abstract（不同解析器输出标题级别不同）
+    abstract_pattern = re.compile(r'#{1,2}\s*[Aa]bstract\s*\n+(.+?)(?=\n#{1,3}\s|\Z)', re.DOTALL)
     match = abstract_pattern.search(markdown)
     if match:
         return match.group(1).strip()

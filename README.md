@@ -26,22 +26,25 @@ pip install -r requirements.txt
 
 ### 配置API Key（⚠️ 需自备）
 
-paper2html 依赖两个第三方 API，**需要你自行注册并配置**，不提供共享 key：
+paper2html 依赖第三方 API，**需要你自行注册并配置**，不提供共享 key：
 
 | API | 用途 | 注册地址 | 费用说明 |
 |-----|------|----------|----------|
-| Doc2X | PDF解析（解析层） | https://pdf2x.cn | 免费额度约200页，超出0.02元/页 |
+| Doc2X / PDF2X | PDF解析（解析层，二选一） | https://doc2x.noedgeai.com 或 https://pdf2x.cn | Doc2X免费约200页，PDF2X免费约200页，超出约0.02元/页 |
 | DeepSeek | AI摘要与理解（理解层） | https://platform.deepseek.com | 极低成本，约1元可处理数十篇论文 |
 
-> 💡 不配置 DeepSeek Key 也可以使用 `--no-understand` 模式，只输出排版后的HTML，跳过AI摘要生成。  
-> ⚠️ Doc2X Key 是必须的，没有它无法解析PDF。
+> 💡 不配置 DeepSeek Key 也可以使用 `--no-understand` 模式，只输出排版后的HTML，跳过AI摘要生成。
+> ⚠️ 至少配置一个 PDF 解析 API Key（Doc2X 或 PDF2X），否则无法解析PDF。
+> 🔄 解析器自动 fallback：Doc2X → PDF2X → PPX（本地免费）
 
 ```bash
-# 必填：Doc2X API（解析用）
-export DOC2X_APIKEY="your-doc2x-key"
+# 必填（二选一）：PDF解析 API
+export DOC2X_APIKEY="your-doc2x-key"      # Doc2X 平台
+export PDF2X_APIKEY="your-pdf2x-key"      # PDF2X 平台（fallback）
 
 # 可选：DeepSeek API（AI理解用，不配则自动跳过理解层）
-export DEEPSEEK_API_KEY="your-deepseek-key"
+export DEEPSEEK_APIKEY="your-deepseek-key"
+export DEEPSEEK_BASE_URL="https://api.deepseek.com/v1"  # 默认值，可选
 ```
 
 ### 使用

@@ -5,6 +5,7 @@ paper2html Skill - 解析层
 
 from .models import ParseResult, UnderstandingResult, LLMResponse
 from .doc2x_parser import Doc2XParser
+from .pdf2x_parser import PDF2XParser
 from .ppx_parser import PPXParser
 from .arxiv_handler import ArxivHandler
 
@@ -13,6 +14,7 @@ __all__ = [
     "UnderstandingResult", 
     "LLMResponse",
     "Doc2XParser",
+    "PDF2XParser",
     "PPXParser",
     "ArxivHandler",
 ]

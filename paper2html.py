@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 # 导入各层模块
 # ============================================================================
 
-from parsers import Doc2XParser, ArxivHandler, ParseResult
+from parsers import Doc2XParser, PDF2XParser, ArxivHandler, PPXParser, ParseResult
 from understanding import (
     PaperUnderstanding,
     LLMClient,
@@ -322,6 +322,20 @@ class Paper2HTML:
             # 解析PDF
             parse_result = self.parser.parse(pdf_path)
             
+            # Doc2X失败或返回空内容时，自动fallback到PDF2X
+            if not parse_result.success or not parse_result.markdown.strip():
+                reason = "返回空内容" if parse_result.success and not parse_result.markdown.strip() else parse_result.error_message or "未知错误"
+                logger.warning(f"   Doc2X解析无效({reason})，尝试PDF2X解析...")
+                pdf2x_parser = PDF2XParser()
+                parse_result = pdf2x_parser.parse(pdf_path)
+            
+            # PDF2X也失败时，尝试PPX本地解析
+            if not parse_result.success or not parse_result.markdown.strip():
+                reason = "返回空内容" if parse_result.success and not parse_result.markdown.strip() else parse_result.error_message or "未知错误"
+                logger.warning(f"   PDF2X解析无效({reason})，尝试PPX本地解析...")
+                ppx_parser = PPXParser()
+                parse_result = ppx_parser.parse(pdf_path)
+            
             # 补充arXiv元数据
             if parse_result.success and metadata:
                 if not parse_result.metadata:
@@ -361,6 +375,20 @@ class Paper2HTML:
         
         try:
             parse_result = self.parser.parse(str(pdf_path))
+            
+            # Doc2X失败或返回空内容时，自动fallback到PDF2X
+            if not parse_result.success or not parse_result.markdown.strip():
+                reason = "返回空内容" if parse_result.success and not parse_result.markdown.strip() else parse_result.error_message or "未知错误"
+                logger.warning(f"   Doc2X解析无效({reason})，尝试PDF2X解析...")
+                pdf2x_parser = PDF2XParser()
+                parse_result = pdf2x_parser.parse(str(pdf_path))
+            
+            # PDF2X也失败时，尝试PPX本地解析
+            if not parse_result.success or not parse_result.markdown.strip():
+                reason = "返回空内容" if parse_result.success and not parse_result.markdown.strip() else parse_result.error_message or "未知错误"
+                logger.warning(f"   PDF2X解析无效({reason})，尝试PPX本地解析...")
+                ppx_parser = PPXParser()
+                parse_result = ppx_parser.parse(str(pdf_path))
             
             # 补充本地文件元数据
             if parse_result.success:

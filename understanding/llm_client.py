@@ -531,14 +531,30 @@ class PaperUnderstanding:
                 conclusion = chunk.content[:2000]
                 break
         
-        response = self.llm.call(
-            SYSTEM_PROMPT_TLDR,
-            get_tldr_prompt(abstract, conclusion)
-        )
+        # 检测模板占位符的正则
+        import re as _re
+        placeholder_pattern = _re.compile(r'\[.+?\]')
         
-        if response.success:
-            return response.content.strip()
-        return f"TL;DR生成失败: {response.error}"
+        for attempt in range(3):
+            response = self.llm.call(
+                SYSTEM_PROMPT_TLDR,
+                get_tldr_prompt(abstract, conclusion)
+            )
+            
+            if response.success:
+                result = response.content.strip()
+                # 检测是否是模板占位符响应（如"基于[核心方法/模型]"）
+                if placeholder_pattern.search(result) and len(result) < 200:
+                    logger.warning(f"TL;DR返回模板占位符(第{attempt+1}次)，重试...")
+                    continue
+                return result
+            else:
+                if attempt < 2:
+                    logger.warning(f"TL;DR生成失败(第{attempt+1}次)，重试...")
+                    continue
+                return f"TL;DR生成失败: {response.error}"
+        
+        return response.content.strip() if response.success else f"TL;DR生成失败: {response.error}"
     
     def _generate_three_minutes(self, tldr: str, section_summaries: List[SectionSummary]) -> KeyFindingsResult:
         """生成三分钟摘要"""
