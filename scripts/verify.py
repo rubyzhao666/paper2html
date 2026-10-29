@@ -27,8 +27,13 @@ def main():
     # 测试 1: 模块导入
     print("\n▶ 测试 1: 核心模块导入")
     try:
-        from parsers import ParseResult
+        from parsers import ParseResult, MiniCPMParser, build_parser_plan
         test("ParseResult 导入成功", True)
+        test(
+            "数字 PDF 默认计划仍以 Doc2X 开头",
+            build_parser_plan("auto", scanned=False, minicpm_configured=True)[0] == "doc2x",
+        )
+        test("MiniCPMParser 可构造", MiniCPMParser(api_key="dummy", base_url="http://127.0.0.1:9/v1").model == "minicpm-ocr")
     except Exception as e:
         test("ParseResult 导入成功", False, str(e))
     

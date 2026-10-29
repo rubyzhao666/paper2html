@@ -21,8 +21,9 @@
 3. PDF 文件损坏
 
 **解决方案**:
-- 使用可编辑的 PDF（非扫描版）
-- 尝试用工具（如 Calibre）转换扫描版 PDF
+- 扫描件配置 MiniCPM-OCR 后重试：`export MINICPM_BASE_URL=...`，再运行 `python paper2html.py --input scan.pdf --parser minicpm`
+- `auto` 模式会在抽不出文本层且已配置 MiniCPM 时自动改用 OCR；未配置时仍走 Doc2X → PDF2X → PPX
+- 整页 OCR 需要 `pip install pymupdf`。版面级解析另设 `MINICPM_USE_SDK=1` 并安装 `minicpm-ocr[pdf]`
 - 检查 PDF 是否可以正常打开
 
 ### Q: 公式识别不完整或错误

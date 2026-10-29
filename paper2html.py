@@ -33,7 +33,17 @@ logger = logging.getLogger(__name__)
 # 导入各层模块
 # ============================================================================
 
-from parsers import Doc2XParser, PDF2XParser, ArxivHandler, PPXParser, ParseResult
+from parsers import (
+    Doc2XParser,
+    ArxivHandler,
+    ParseResult,
+    PARSER_NAMES,
+    build_parser_plan,
+    create_parser,
+    normalize_parser_name,
+    pdf_lacks_text_layer,
+    minicpm_is_configured,
+)
 from understanding import (
     PaperUnderstanding,
     LLMClient,
@@ -53,7 +63,7 @@ class Paper2HTML:
     学术论文 → 可视化HTML阅读器
     
     完整的论文转换管线：
-    解析层 (Doc2X/PPX) → 理解层 (LLM摘要) → 渲染层 (HTML)
+    解析层 (Doc2X/PDF2X/PPX，扫描件可选 MiniCPM) → 理解层 (LLM摘要) → 渲染层 (HTML)
     
     使用示例:
         >>> from paper2html import Paper2HTML
@@ -75,6 +85,11 @@ class Paper2HTML:
         llm_api_key: Optional[str] = None,
         llm_base_url: Optional[str] = None,
         llm_model: Optional[str] = None,
+        parser: Optional[str] = None,
+        minicpm_api_key: Optional[str] = None,
+        minicpm_base_url: Optional[str] = None,
+        minicpm_model: Optional[str] = None,
+        minicpm_fallback: Optional[bool] = None,
     ):
         """
         初始化 Paper2HTML 转换器
@@ -88,9 +103,16 @@ class Paper2HTML:
             llm_api_key: LLM API密钥，默认从环境变量 DEEPSEEK_API_KEY 读取
             llm_base_url: LLM API Base URL，默认 https://api.deepseek.com/v1
             llm_model: LLM模型名，默认 deepseek-chat
+            parser: 解析器选择。auto（默认）在数字 PDF 上走 Doc2X → PDF2X → PPX；
+                    扫描件且已配置 MiniCPM 时优先 OCR。也可传 doc2x/pdf2x/ppx/minicpm。
+                    未传时读环境变量 PAPER2HTML_PARSER。
+            minicpm_api_key: MiniCPM API 密钥，默认 MINICPM_API_KEY 或 OCR_API_KEY
+            minicpm_base_url: OpenAI 兼容服务地址，默认 MINICPM_BASE_URL / OCR_BASE_URL / MINICPM_SERVER_URL
+            minicpm_model: 模型名，默认 MINICPM_MODEL / OCR_MODEL / minicpm-ocr
+            minicpm_fallback: 数字链路全部失败后再试 MiniCPM。默认读 MINICPM_OCR_FALLBACK。
             
         Raises:
-            ValueError: 当 style 不在支持列表中时
+            ValueError: 当 style 或 parser 不在支持列表中时
         """
         if style not in self.AVAILABLE_STYLES:
             raise ValueError(
@@ -109,6 +131,23 @@ class Paper2HTML:
         self.llm_api_key = llm_api_key or os.environ.get("DEEPSEEK_API_KEY", "")
         self.llm_base_url = llm_base_url or os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
         self.llm_model = llm_model or os.environ.get("LLM_MODEL", "deepseek-chat")
+
+        try:
+            self.parser_name = normalize_parser_name(parser or os.environ.get("PAPER2HTML_PARSER") or "auto")
+        except ValueError as exc:
+            raise ValueError(
+                f"Unknown parser: {parser or os.environ.get('PAPER2HTML_PARSER')}. "
+                f"Available parsers: {list(PARSER_NAMES)}"
+            ) from exc
+        self.minicpm_api_key = minicpm_api_key
+        self.minicpm_base_url = minicpm_base_url
+        self.minicpm_model = minicpm_model
+        if minicpm_fallback is None:
+            self.minicpm_fallback = os.environ.get("MINICPM_OCR_FALLBACK", "").strip().lower() in {
+                "1", "true", "yes", "on",
+            }
+        else:
+            self.minicpm_fallback = bool(minicpm_fallback)
         
         self._parser = None
         self._arxiv_handler = None
@@ -319,22 +358,7 @@ class Paper2HTML:
             pdf_path, arxiv_id, metadata = self.arxiv_handler.download_and_prepare(url_or_id)
             logger.info(f"   已下载arXiv论文: {arxiv_id}")
             
-            # 解析PDF
-            parse_result = self.parser.parse(pdf_path)
-            
-            # Doc2X失败或返回空内容时，自动fallback到PDF2X
-            if not parse_result.success or not parse_result.markdown.strip():
-                reason = "返回空内容" if parse_result.success and not parse_result.markdown.strip() else parse_result.error_message or "未知错误"
-                logger.warning(f"   Doc2X解析无效({reason})，尝试PDF2X解析...")
-                pdf2x_parser = PDF2XParser()
-                parse_result = pdf2x_parser.parse(pdf_path)
-            
-            # PDF2X也失败时，尝试PPX本地解析
-            if not parse_result.success or not parse_result.markdown.strip():
-                reason = "返回空内容" if parse_result.success and not parse_result.markdown.strip() else parse_result.error_message or "未知错误"
-                logger.warning(f"   PDF2X解析无效({reason})，尝试PPX本地解析...")
-                ppx_parser = PPXParser()
-                parse_result = ppx_parser.parse(pdf_path)
+            parse_result = self._parse_with_plan(pdf_path)
             
             # 补充arXiv元数据
             if parse_result.success and metadata:
@@ -374,21 +398,7 @@ class Paper2HTML:
         logger.info(f"   正在解析PDF: {pdf_path.name}")
         
         try:
-            parse_result = self.parser.parse(str(pdf_path))
-            
-            # Doc2X失败或返回空内容时，自动fallback到PDF2X
-            if not parse_result.success or not parse_result.markdown.strip():
-                reason = "返回空内容" if parse_result.success and not parse_result.markdown.strip() else parse_result.error_message or "未知错误"
-                logger.warning(f"   Doc2X解析无效({reason})，尝试PDF2X解析...")
-                pdf2x_parser = PDF2XParser()
-                parse_result = pdf2x_parser.parse(str(pdf_path))
-            
-            # PDF2X也失败时，尝试PPX本地解析
-            if not parse_result.success or not parse_result.markdown.strip():
-                reason = "返回空内容" if parse_result.success and not parse_result.markdown.strip() else parse_result.error_message or "未知错误"
-                logger.warning(f"   PDF2X解析无效({reason})，尝试PPX本地解析...")
-                ppx_parser = PPXParser()
-                parse_result = ppx_parser.parse(str(pdf_path))
+            parse_result = self._parse_with_plan(str(pdf_path))
             
             # 补充本地文件元数据
             if parse_result.success:
@@ -406,6 +416,80 @@ class Paper2HTML:
                 error_message=f"PDF解析失败: {str(e)}"
             )
     
+    def _parse_with_plan(self, pdf_path: str) -> ParseResult:
+        """按解析计划依次尝试。数字 PDF 的 auto 计划仍以 Doc2X 开头。"""
+        scanned = pdf_lacks_text_layer(pdf_path)
+        configured = minicpm_is_configured(self.minicpm_base_url)
+        plan = build_parser_plan(
+            self.parser_name,
+            scanned=scanned,
+            minicpm_configured=configured,
+            minicpm_fallback=self.minicpm_fallback,
+        )
+        logger.info("   解析顺序: %s", " → ".join(plan))
+        if scanned and self.parser_name == "auto" and "minicpm" not in plan:
+            logger.warning(
+                "   PDF 似乎没有可用文本层。配置 MINICPM_BASE_URL 后会自动改用 MiniCPM，"
+                "或显式传入 --parser minicpm。"
+            )
+        elif scanned and plan and plan[0] == "minicpm":
+            logger.info("   未检测到可用文本层，优先使用 MiniCPM-OCR")
+
+        labels = {
+            "doc2x": "Doc2X",
+            "pdf2x": "PDF2X",
+            "ppx": "PPX",
+            "minicpm": "MiniCPM-OCR",
+        }
+        last_result = None
+        for index, name in enumerate(plan):
+            if index == 0:
+                logger.info("   使用解析器: %s", labels.get(name, name))
+            result = self._run_named_parser(name, pdf_path)
+            last_result = result
+            if result.success and (result.markdown or "").strip():
+                if not result.metadata:
+                    result.metadata = {}
+                result.metadata.setdefault("parser", name)
+                return result
+            if index < len(plan) - 1:
+                reason = (
+                    "返回空内容"
+                    if result.success and not (result.markdown or "").strip()
+                    else result.error_message or "未知错误"
+                )
+                nxt = labels.get(plan[index + 1], plan[index + 1])
+                logger.warning(
+                    "   %s解析无效(%s)，尝试%s解析...",
+                    labels.get(name, name),
+                    reason,
+                    nxt,
+                )
+
+        return last_result or ParseResult(
+            source_file=pdf_path,
+            success=False,
+            error_message="没有可用的解析器",
+        )
+
+    def _run_named_parser(self, name: str, pdf_path: str) -> ParseResult:
+        try:
+            parser = create_parser(
+                name,
+                doc2x_api_key=self.doc2x_api_key,
+                minicpm_api_key=self.minicpm_api_key,
+                minicpm_base_url=self.minicpm_base_url,
+                minicpm_model=self.minicpm_model,
+            )
+            return parser.parse(pdf_path)
+        except Exception as exc:
+            logger.error("%s 解析异常: %s", name, exc)
+            return ParseResult(
+                source_file=pdf_path,
+                success=False,
+                error_message=f"{name} 解析异常: {exc}",
+            )
+
     def _generate_output_path(self, input_path: str) -> str:
         """生成输出文件路径"""
         input_p = Path(input_path)
@@ -507,12 +591,21 @@ def main():
   python paper2html.py --input https://arxiv.org/abs/2402.19473
   python paper2html.py --input paper.pdf --style neon_tech --output output.html
   python paper2html.py --input paper.pdf --no-understand  # 跳过AI理解
+  python paper2html.py --input scan.pdf --parser minicpm --no-understand
 
 环境变量:
-  DOC2X_APIKEY      Doc2X API密钥（解析用）
-  DEEPSEEK_API_KEY  DeepSeek API密钥（理解用）
-  DEEPSEEK_BASE_URL DeepSeek API Base URL
-  LLM_MODEL         LLM模型名（默认deepseek-chat）
+  DOC2X_APIKEY           Doc2X API密钥（解析用）
+  PDF2X_APIKEY           PDF2X API密钥（Doc2X 失败时的 fallback）
+  PAPER2HTML_PARSER      解析器: auto|doc2x|pdf2x|ppx|minicpm（默认 auto）
+  MINICPM_API_KEY        MiniCPM / OCR API 密钥（也可用 OCR_API_KEY）
+  MINICPM_BASE_URL       OpenAI 兼容 Base URL，需含 /v1（也可用 OCR_BASE_URL）
+  MINICPM_SERVER_URL     本地识别服务，例如 http://127.0.0.1:18499
+  MINICPM_MODEL          模型名（默认 minicpm-ocr，也可用 OCR_MODEL）
+  MINICPM_USE_SDK        设为 1 时走 minicpm-ocr SDK（需版面模型）
+  MINICPM_OCR_FALLBACK   设为 1 时，数字链路全部失败后再试 MiniCPM
+  DEEPSEEK_API_KEY       DeepSeek API密钥（理解用）
+  DEEPSEEK_BASE_URL      DeepSeek API Base URL
+  LLM_MODEL              LLM模型名（默认deepseek-chat）
         """
     )
     
@@ -535,8 +628,30 @@ def main():
     )
     
     parser.add_argument(
+        "--parser",
+        choices=list(PARSER_NAMES),
+        default=None,
+        help="解析器（默认 auto：数字 PDF 走 Doc2X→PDF2X→PPX；扫描件在已配置 MiniCPM 时优先 OCR）。也可用环境变量 PAPER2HTML_PARSER",
+    )
+
+    parser.add_argument(
         "--api-key",
         help="Doc2X API密钥（默认从环境变量 DOC2X_APIKEY 读取）"
+    )
+
+    parser.add_argument(
+        "--minicpm-api-key",
+        help="MiniCPM API密钥（默认 MINICPM_API_KEY 或 OCR_API_KEY）",
+    )
+
+    parser.add_argument(
+        "--minicpm-base-url",
+        help="MiniCPM OpenAI 兼容 Base URL（默认 MINICPM_BASE_URL、OCR_BASE_URL 或 MINICPM_SERVER_URL）",
+    )
+
+    parser.add_argument(
+        "--minicpm-model",
+        help="MiniCPM 模型名（默认 MINICPM_MODEL、OCR_MODEL 或 minicpm-ocr）",
     )
     
     parser.add_argument(
@@ -581,7 +696,11 @@ def main():
             doc2x_api_key=args.api_key,
             llm_api_key=args.llm_api_key,
             llm_base_url=args.llm_base_url,
-            llm_model=args.llm_model
+            llm_model=args.llm_model,
+            parser=args.parser,
+            minicpm_api_key=args.minicpm_api_key,
+            minicpm_base_url=args.minicpm_base_url,
+            minicpm_model=args.minicpm_model,
         )
         
         # 执行转换

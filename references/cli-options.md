@@ -38,11 +38,29 @@ python paper2html.py [选项]
 
 ### API 配置
 
+#### 解析器选择
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--parser` | `auto`、`doc2x`、`pdf2x`、`ppx`、`minicpm` | `auto`（或环境变量 `PAPER2HTML_PARSER`） |
+
+- `auto`：有可提取文本时为 Doc2X → PDF2X → PPX。没有可用文本层且已配置 MiniCPM 时，先 OCR，失败后再走数字链路。
+- `doc2x`：数字链路，不插入 MiniCPM。
+- `minicpm`：只用 MiniCPM-OCR，不回退到付费 API。
+
 #### Doc2X API（解析层）
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `--api-key` | Doc2X API密钥 | 环境变量 `DOC2X_APIKEY` |
+
+#### MiniCPM-OCR（扫描件，可选）
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--minicpm-api-key` | OCR API 密钥 | `MINICPM_API_KEY` 或 `OCR_API_KEY` |
+| `--minicpm-base-url` | OpenAI 兼容 Base URL | `MINICPM_BASE_URL`、`OCR_BASE_URL` 或 `MINICPM_SERVER_URL` |
+| `--minicpm-model` | 模型名 | `MINICPM_MODEL`、`OCR_MODEL` 或 `minicpm-ocr` |
 
 #### LLM API（理解层）
 
@@ -149,6 +167,9 @@ python paper2html.py --input paper.pdf --debug
 # Bash
 export DOC2X_APIKEY="sk-your-doc2x-key"
 export DEEPSEEK_API_KEY="sk-your-deepseek-key"
+# 扫描件可选
+export MINICPM_API_KEY="your-minicpm-key"
+export MINICPM_BASE_URL="https://your-ocr-host/v1"
 
 # Zsh
 set -x DOC2X_APIKEY "sk-your-doc2x-key"
@@ -161,6 +182,8 @@ set -x DEEPSEEK_API_KEY "sk-your-deepseek-key"
 # .env
 DOC2X_APIKEY=sk-your-doc2x-key
 DEEPSEEK_API_KEY=sk-your-deepseek-key
+MINICPM_API_KEY=your-minicpm-key
+MINICPM_BASE_URL=https://your-ocr-host/v1
 ```
 
 然后在 Python 中使用：

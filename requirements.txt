@@ -20,6 +20,12 @@ requests>=2.28.0
 # 备选本地解析（需要Python 3.12+）
 # memect-ppx>=0.1.0
 
+# 扫描版 PDF：MiniCPM-OCR（可选，不默认安装，不替代 Doc2X）
+# 整页 OpenAI 兼容接口需要渲染库：
+# pymupdf>=1.23.0
+# SDK 版面分析（另需识别服务与版面模型目录）：
+# minicpm-ocr[pdf]>=1.0.2
+
 # arXiv下载（可选，arxiv_handler自带简易实现）
 # arxiv>=1.4.0
 
