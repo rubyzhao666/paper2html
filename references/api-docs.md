@@ -253,3 +253,18 @@ success, content, images = client.pdf2md(
 ## 常见问题
 
 详见 `references/troubleshooting.md`
+
+## MiniCPM-OCR（可选，扫描件）
+
+数字 PDF 继续用上面的 Doc2X。MiniCPM 适配器走 OpenAI 兼容 Chat Completions，密钥不写进仓库：
+
+| 环境变量 | 作用 |
+|----------|------|
+| `MINICPM_BASE_URL` 或 `OCR_BASE_URL` | 含 `/v1` 的服务地址 |
+| `MINICPM_API_KEY` 或 `OCR_API_KEY` | `Authorization: Bearer` |
+| `MINICPM_MODEL` 或 `OCR_MODEL` | 模型名，默认 `minicpm-ocr` |
+| `MINICPM_SERVER_URL` | 本地服务根地址，例如 `http://127.0.0.1:18499` |
+
+请求为 `POST ${BASE_URL}/chat/completions`，图片用 `image_url` data URI，提示词以官方的 `Text Recognition:` 开头，并要求公式使用 `$...$` / `$$...$$`。返回里的 `\[ \]`、`\( \)` 会再归一成同样的定界符。
+
+`MINICPM_USE_SDK=1` 时改为调用 PyPI 包 `minicpm-ocr` 的 `load_config` / `pipelined_run` / `assemble_document_markdown`。版面模型目录用 `OCR_LAYOUT_MODEL_DIR` 或 `MINICPM_LAYOUT_MODEL`。官方文档：https://github.com/OpenBMB/MiniCPM-OCR

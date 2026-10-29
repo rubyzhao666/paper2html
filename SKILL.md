@@ -126,8 +126,11 @@ assert "<strong>" in html, "Bold text not converted"
 
 | 模块 | 说明 |
 |------|------|
-| `doc2x_parser.py` | Doc2X API 解析器（主方案） |
-| `ppx_parser.py` | 本地 PPX 解析器（备选） |
+| `doc2x_parser.py` | Doc2X API 解析器（数字 PDF 主方案） |
+| `pdf2x_parser.py` | PDF2X API 解析器（Doc2X 失败后的 fallback） |
+| `ppx_parser.py` | 本地 PPX 解析器（再失败后的本地 fallback） |
+| `minicpm_parser.py` | MiniCPM-OCR（扫描件 / 显式 `--parser minicpm`） |
+| `selector.py` | 解析器选择与 fallback 计划 |
 | `arxiv_handler.py` | arXiv 链接处理和 PDF 下载 |
 
 ```python
@@ -141,6 +144,46 @@ result = parser.parse("paper.pdf")
 handler = ArxivHandler()
 pdf_path, arxiv_id, metadata = handler.download_and_prepare("https://arxiv.org/abs/2402.19473")
 ```
+
+#### MiniCPM-OCR（扫描件，可选）
+
+不替换 Doc2X。`auto` 只在 PyPDF2 抽不出足够文本、且配置了服务地址时才把 MiniCPM 放在 Doc2X 前面。显式 `--parser doc2x` 仍走 Doc2X → PDF2X → PPX。
+
+托管接口与 Doc2X 一样，只从环境变量读密钥：
+
+```bash
+export MINICPM_API_KEY="your-key"                 # 也认 OCR_API_KEY
+export MINICPM_BASE_URL="https://your-host/v1"    # 也认 OCR_BASE_URL
+export MINICPM_MODEL="minicpm-ocr"                # 可选
+pip install pymupdf                               # 整页渲染，可选 pypdfium2 / pdf2image
+python paper2html.py --input scan.pdf --parser minicpm --no-understand
+```
+
+本地 OpenAI 兼容服务（vLLM 默认端口 18499）可以不提供云端密钥：
+
+```bash
+export MINICPM_SERVER_URL="http://127.0.0.1:18499"
+export MINICPM_MODEL="minicpm-ocr"
+```
+
+官方 SDK 路径（版面分析 + 公式区域）需要额外安装，并自行准备版面权重：
+
+```bash
+pip install "minicpm-ocr[pdf]"
+export MINICPM_USE_SDK=1
+export MINICPM_LAYOUT_MODEL="/path/to/PP-DocLayoutV3"   # 或 OCR_LAYOUT_MODEL_DIR
+```
+
+```python
+from parsers import MiniCPMParser
+
+result = MiniCPMParser(
+    api_key="your-key",
+    base_url="https://your-host/v1",
+).parse("scan.pdf")
+```
+
+数字链路都失败后才 OCR：`export MINICPM_OCR_FALLBACK=1`。这不会让已成功的 Doc2X 结果被 MiniCPM 覆盖。
 
 ### 理解层 (understanding/)
 
@@ -194,7 +237,11 @@ python paper2html.py [选项]
   --input, -i          输入文件路径或arXiv链接（必需）
   --output, -o         输出HTML路径（默认自动生成）
   --style, -s          样式预设: dark_lab|clean_paper|neon_tech
+  --parser             解析器: auto|doc2x|pdf2x|ppx|minicpm（默认 auto）
   --api-key            Doc2X API密钥
+  --minicpm-api-key    MiniCPM / OCR API密钥
+  --minicpm-base-url   MiniCPM OpenAI 兼容 Base URL
+  --minicpm-model      MiniCPM 模型名（默认 minicpm-ocr）
   --llm-api-key        LLM API密钥
   --llm-base-url       LLM API Base URL
   --llm-model          LLM模型名
@@ -222,6 +269,9 @@ python paper2html.py \
   --input paper.pdf \
   --api-key sk-xxx \
   --llm-api-key sk-xxx
+
+# 扫描版 PDF，显式使用 MiniCPM-OCR
+python paper2html.py --input scan.pdf --parser minicpm --no-understand
 ```
 
 ---
@@ -327,6 +377,16 @@ renderer.render(parse_result, understanding_result, "output.html")
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `DOC2X_APIKEY` | Doc2X API 密钥 | - |
+| `PDF2X_APIKEY` | PDF2X API 密钥 | - |
+| `PAPER2HTML_PARSER` | 解析器：`auto` / `doc2x` / `pdf2x` / `ppx` / `minicpm` | `auto` |
+| `MINICPM_API_KEY` | MiniCPM API 密钥（也认 `OCR_API_KEY`） | - |
+| `MINICPM_BASE_URL` | OpenAI 兼容地址，含 `/v1`（也认 `OCR_BASE_URL`） | - |
+| `MINICPM_SERVER_URL` | 本地识别服务，如 `http://127.0.0.1:18499` | - |
+| `MINICPM_MODEL` | 服务端模型名（也认 `OCR_MODEL`） | `minicpm-ocr` |
+| `MINICPM_USE_SDK` | `1` 时使用 `minicpm-ocr` SDK 做版面分析 | 关闭 |
+| `MINICPM_LAYOUT_MODEL` | 版面模型目录（也认 `OCR_LAYOUT_MODEL_DIR`） | - |
+| `MINICPM_OCR_FALLBACK` | `1` 时数字链路全部失败后再试 MiniCPM | 关闭 |
+| `MINICPM_MAX_PAGES` | 整页 OCR 最多处理的页数，`0` 或不设表示不截断 | 不截断 |
 | `DEEPSEEK_API_KEY` | DeepSeek API 密钥 | - |
 | `DEEPSEEK_BASE_URL` | DeepSeek API Base URL | https://api.deepseek.com/v1 |
 | `LLM_MODEL` | LLM 模型名 | deepseek-chat |
@@ -345,7 +405,7 @@ LLM_MODEL=deepseek-chat
 
 ## 已知限制
 
-1. **扫描版 PDF**：无法提取文本层，需要 OCR 预处理
+1. **扫描版 PDF**：默认数字链路抽不出文本。配置 MiniCPM 后，`auto` 会在无文本层时改用 OCR，或显式 `--parser minicpm`
 2. **API 额度**：Doc2X 和 DeepSeek 都有免费额度限制
 3. **复杂表格**：多级表头或合并单元格可能格式错乱
 4. **arXiv 下载**：部分论文可能下载失败（网络原因）
@@ -355,7 +415,7 @@ LLM_MODEL=deepseek-chat
 
 ## 不做功能（MVP）
 
-- ~~OCR 扫描版 PDF~~
+- OCR 扫描版 PDF 已提供可选的 MiniCPM 解析器，但不是数字 PDF 的默认后端
 - ~~多论文批量处理~~
 - ~~PDF 解析修复~~
 - ~~论文对比功能~~
@@ -371,7 +431,10 @@ paper2html/
 ├── parsers/                   # 解析层
 │   ├── __init__.py
 │   ├── doc2x_parser.py
+│   ├── pdf2x_parser.py
 │   ├── ppx_parser.py
+│   ├── minicpm_parser.py
+│   ├── selector.py
 │   └── arxiv_handler.py
 ├── understanding/              # 理解层
 │   ├── __init__.py
